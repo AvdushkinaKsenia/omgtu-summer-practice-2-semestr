@@ -32,35 +32,135 @@
 
 #!csharp
 
-//
-// Вычисление определенного интеграла
-//
+#r "nuget: xunit, 2.8.1"
+#r "nuget:ScottPlot, 5.0.35"
+
+#!csharp
+
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Linq;
+
 class DefiniteIntegral
 {
-    //
-    // a, b - границы отрезка, на котором происходит вычисление опредленного интеграла
-    // function - функция, для которой вычисляется определнный интеграл
-    // step - размер одного шага разбиения
-    // threadsNumber - число потоков, которые используются для вычислений
-    //
-    public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
+    public static double Solve(double a, double b, Func<double, double> function, double step, int threadsNumber)
     {
-        // отсюда надо начинать реализацию задачи
-        return 0.0;
+        double answer = 0.0;
+        object lockObj = new object(); //Объект блокировки для синхронизации доступа к переменной answer из разных потоков
+        double threadSegmentLen = (b - a) / threadsNumber; //Длина одного сегмента, который будет обрабатываться одним потоком
+        Barrier barrier = new Barrier(threadsNumber); 
+
+        Parallel.For(0, threadsNumber, i =>
+        {
+            double start = a + i * threadSegmentLen;
+            double end = (i == threadsNumber - 1) ? b : start + threadSegmentLen;
+            double sum = Enumerable.Range(0, (int)((end - start) / step))
+            .Select(i => start + i * step)
+            .Sum(x => 0.5 * (function(x) + function(Math.Min(x + step, end))) * (Math.Min(x + step, end) - x));
+
+            lock (lockObj)
+                answer += sum;
+
+            barrier.SignalAndWait();
+        });
+
+        return answer;
+    }
+
+
+    public static double OneThreadSolve(double a, double b, Func<double, double> function, double step) {
+        int n = Convert.ToInt32((b - a) / step);
+        int zeros = Convert.ToInt32(Math.Floor(Math.Log(n, 10)));
+        int baseEpsilon = 4;
+        int epsilon = baseEpsilon + zeros;
+
+        double answer = Enumerable.Range(0, n)
+            .Select(i => (function(a + i * step) + function(a + (i + 1) * step)) / 2 * step)
+            .Sum();
+
+        answer = Math.Round(answer, epsilon);
+
+        return answer;
     }
 }
 
 #!csharp
 
-#r "nuget: xunit, 2.8.1"
+using Xunit;
+using System.Diagnostics;
+
+var SIN = (double x) => Math.Sin(x);
+Stopwatch watch = new Stopwatch();
+double[] dataX = new double[8];
+double[] dataY = new double[8];
+
+List<double> steps = new List<double>() {1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6};
+
+foreach (double step in steps)
+{
+    watch.Start();
+    Assert.Equal(0, DefiniteIntegral.OneThreadSolve(-100, 100, SIN, step), 1e-4);
+    watch.Stop();
+    Console.WriteLine($"Time: {watch.Elapsed.TotalMilliseconds} Step: {step}");
+    watch.Reset();
+}
+
+Console.WriteLine("Оптимальный наименьший шаг 1e-5, т.к. он значительно быстрее чем шаг 1e-6");
+double bestStep = 1e-5;
+
+int BestThread;
+int minThreadNumber = 2;
+int maxThreadNumber = 10;
+double minTime = double.MaxValue;
+for (int j=minThreadNumber; j<maxThreadNumber; j++)
+{
+    double Totaltime = 0;
+    for (int k=0; k<7; k++)
+    {
+        watch.Start();
+        Assert.Equal(0, DefiniteIntegral.Solve(-100, 100, SIN, bestStep, j), 1e-4);
+        watch.Stop();
+        Totaltime += watch.Elapsed.TotalMilliseconds;
+        watch.Reset();
+    }
+    dataX[j-minThreadNumber]=Totaltime/7;
+    dataY[j-minThreadNumber]=j;
+
+    if ((Totaltime/7) < minTime)
+    {
+        minTime = Totaltime/7;
+        BestThread = j;
+    }
+}
+ScottPlot.Plot plt = new();
+plt.Add.Scatter(dataX, dataY);
+plt.XLabel("Duration in ms");
+plt.YLabel("Threads numbers");
+plt.Title($"Best result: {Math.Round(minTime, 2)}ms");
+plt
+
+#!csharp
 
 using Xunit;
+using System.Diagnostics;
+using Microsoft.DotNet.Interactive.Formatting;
 
-var X = (double x) => x;
-var SIN = (double x) => Math.Sin(x);
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => 
+    w.Write(((ScottPlot.Plot)p).GetImageHtml(400, 300)), HtmlFormatter.MimeType);
 
-Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
+double oneThreadTotalTime = 0;
+for (int i=0; i<7; i++)
+{
+    watch.Start();
+    Assert.Equal(0, DefiniteIntegral.OneThreadSolve(-100, 100, SIN, bestStep), 1e-4);
+    watch.Stop();
+    oneThreadTotalTime += watch.Elapsed.TotalMilliseconds;
+    watch.Reset();
+}
+oneThreadTotalTime = oneThreadTotalTime/7;
 
-Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
-
-Assert.Equal(10, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-5);
+Console.WriteLine($"single thread: {Math.Round(oneThreadTotalTime, 2)}ms");
+Console.WriteLine($"multithreading time: {Math.Round(minTime, 2)}ms");
+Console.WriteLine($"Difference in ms: {Math.Round(Math.Abs(oneThreadTotalTime-minTime), 2)}ms");
+Console.WriteLine($"Difference in %: {Math.Round(Math.Abs(oneThreadTotalTime-minTime)/minTime * 100, 2)}%");

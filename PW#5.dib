@@ -57,13 +57,31 @@ class Message
 
 using System.Collections.Concurrent;
 
-var queue1 = new BlockingCollection<Message>(2); //очередь первого потока
-var queue2 = new BlockingCollection<Message>(2); //очередь второго потока
+public class PingPongTest
+{
+    private void PingPong(BlockingCollection<Message> inputQueue, BlockingCollection<Message> outputQueue)
+    {
+        foreach (var message in inputQueue.GetConsumingEnumerable())
+        {
+            message.Handle();
+            outputQueue.Add(new Message());
+        }
+    }
+    
+    public void Test()
+    {
+        var queue1 = new BlockingCollection<Message>(2); 
+        var queue2 = new BlockingCollection<Message>(2);
 
-// Здесь писать решение
+        var task1 = Task.Run(() => PingPong(queue1, queue2));
+        var task2 = Task.Run(() => PingPong(queue2, queue1));
 
-#!csharp
+        queue1.Add(new Message());
 
-Assert.Equal(0, queue1.Count);
-Assert.Equal(0, queue2.Count);
-Message.Check();
+        Task.WaitAll(task1, task2);
+
+        Assert.Equal(0, queue1.Count);
+        Assert.Equal(0, queue2.Count);
+        Message.Check();
+    }
+}

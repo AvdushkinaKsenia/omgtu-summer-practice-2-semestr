@@ -34,7 +34,7 @@ using Xunit;
 
 class Message
 {
-    static int messageHandled = 0;
+    public static int messageHandled = 0;
     int id;
     public Message()
     {
@@ -57,31 +57,31 @@ class Message
 
 using System.Collections.Concurrent;
 
-public class PingPongTest
+var queue1 = new BlockingCollection<Message>(2); 
+var queue2 = new BlockingCollection<Message>(2);
+
+var task1 = Task.Run(() => PingPong(queue1, queue2));
+var task2 = Task.Run(() => PingPong(queue2, queue1));
+
+queue1.Add(new Message());
+Task.WaitAll(task1, task2);
+
+Assert.Equal(0, queue1.Count);
+Assert.Equal(0, queue2.Count);
+Message.Check();
+
+private void PingPong(BlockingCollection<Message> inputQueue, BlockingCollection<Message> outputQueue)
 {
-    private void PingPong(BlockingCollection<Message> inputQueue, BlockingCollection<Message> outputQueue)
+    foreach (var message in inputQueue.GetConsumingEnumerable())
     {
-        foreach (var message in inputQueue.GetConsumingEnumerable())
+        message.Handle();
+        if (Interlocked.Increment(ref Message.messageHandled) >= 200)
         {
-            message.Handle();
-            outputQueue.Add(new Message());
+            inputQueue.CompleteAdding();
+            outputQueue.CompleteAdding();
+            break;
         }
-    }
-    
-    public void Test()
-    {
-        var queue1 = new BlockingCollection<Message>(2); 
-        var queue2 = new BlockingCollection<Message>(2);
-
-        var task1 = Task.Run(() => PingPong(queue1, queue2));
-        var task2 = Task.Run(() => PingPong(queue2, queue1));
-
-        queue1.Add(new Message());
-
-        Task.WaitAll(task1, task2);
-
-        Assert.Equal(0, queue1.Count);
-        Assert.Equal(0, queue2.Count);
-        Message.Check();
+        outputQueue.Add(new Message());
+        
     }
 }

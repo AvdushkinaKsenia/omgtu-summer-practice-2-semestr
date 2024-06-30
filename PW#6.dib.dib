@@ -37,10 +37,205 @@
 Для этого следует использовать условные события, которые позволят убедиться, что оба потока запустились и готовы читать и писать объекты и только потом запускать таймер.
 2. Для итогового вывода сравнивать усредненные значения.
 
-#!markdown
+#!csharp
 
-// здесь писать код
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Threading;
+
+const int measurementsAmount = 10;
+var measuresBlockingCollection = MeasureBlockingCollection(measurementsAmount);
+var measuresConcurrentQueue = MeasureConcurrentQueue(measurementsAmount);
+var measuresQueue = MeasureQueue(measurementsAmount);
+
+Console.WriteLine($"BlockingCollcetion average time: {measuresBlockingCollection.Sum(r => r.TotalMilliseconds)/ measurementsAmount} ms");
+Console.WriteLine($"ConcurrentQueue average time: {measuresConcurrentQueue.Sum(r => r.TotalMilliseconds)/ measurementsAmount} ms");
+Console.WriteLine($"Queue average time: {measuresQueue.Sum(r => r.TotalMilliseconds)/ measurementsAmount} ms");
+
+const int queueSize = 1_000_000;
+
+
+TimeSpan[] MeasureBlockingCollection(int measurementsAmount)
+{
+    var collection = new BlockingCollection<int>();
+    var startProducer = new ManualResetEvent(false);
+    var startConsumer = new ManualResetEvent(false);
+    var watch = new Stopwatch();
+    var measuresTime = new TimeSpan[measurementsAmount];
+    
+    Thread consumer;
+    Thread producer;
+
+    for (int i = 0; i < measurementsAmount; i++)
+    {
+        producer = new Thread(() =>
+        {
+            startProducer.Set();
+            startConsumer.WaitOne();
+            for (int i = 0; i < queueSize; i++)
+            {
+                collection.Add(i);
+            }
+        });
+
+        consumer = new Thread(() =>
+        {
+            startConsumer.Set();
+            startProducer.WaitOne();
+            for (int i = 0; i < queueSize; i++)
+            {
+                collection.Take();
+            }
+        });
+        producer.Start();
+        consumer.Start();
+        watch.Restart();
+        producer.Join();
+        consumer.Join();
+        measuresTime[i] = watch.Elapsed;
+    }
+
+    return measuresTime;
+}
+
+TimeSpan[] MeasureConcurrentQueue(int measurementsAmount)
+{
+    ConcurrentQueue<int> collection = new ConcurrentQueue<int>();
+    var startProducer = new ManualResetEvent(false);
+    var startConsumer = new ManualResetEvent(false);
+    var watch = new Stopwatch();
+    var measuresTime = new TimeSpan[measurementsAmount];
+
+    Thread producer;
+    Thread consumer;
+
+    for (int i = 0; i < measurementsAmount; i++)
+    {
+        producer = new Thread(() =>
+        {
+            startProducer.Set();
+            startConsumer.WaitOne();
+            for (int i = 0; i < queueSize; i++)
+            {
+                collection.Enqueue(i);
+            }
+        });
+
+        consumer = new Thread(() =>
+        {
+            startConsumer.Set();
+            startProducer.WaitOne();
+            for (int i = 0; i < queueSize; i++)
+            {
+                int value;
+                collection.TryDequeue(out value);
+            }
+        });
+        producer.Start();
+        consumer.Start();
+        watch.Restart();
+        producer.Join();
+        consumer.Join();
+        measuresTime[i] = watch.Elapsed;
+    }
+    
+    return measuresTime;
+}
+
+TimeSpan[] MeasureQueue(int measurementsAmount)
+{
+    var collection = new Queue<int>();
+    var watch = new Stopwatch();
+    var measuresTime = new TimeSpan[measurementsAmount];
+
+    for (int i = 0; i < measurementsAmount; i++)
+    {
+        watch.Restart();
+
+        for (int j = 0; j < queueSize; j++)
+        {
+            collection.Enqueue(j);
+        }
+
+        for (int j = 0; j < queueSize; j++)
+        {
+            collection.Dequeue();
+        }
+
+        measuresTime[i] = watch.Elapsed;
+    }
+    
+    return measuresTime;
+}
+
+#!csharp
+
+#r "nuget:ScottPlot, 5.0.35"
+
+#!csharp
+
+int[] dataX = Enumerable.Range(0, measurementsAmount).ToArray<int>();
+var dataY = measuresQueue.Select(r => r.TotalMilliseconds).ToArray();
+
+ScottPlot.Plot plt = new();
+plt.Add.Scatter(dataX, dataY);
+plt.XLabel("Measurement number");
+plt.YLabel("Time in ms");
+plt.Title($"Results Queue");
+plt
+
+#!csharp
+
+int[] dataX = Enumerable.Range(0, measurementsAmount).ToArray<int>();
+var dataY = measuresConcurrentQueue.Select(r => r.TotalMilliseconds).ToArray();
+
+ScottPlot.Plot plt = new();
+plt.Add.Scatter(dataX, dataY);
+plt.XLabel("Measurement number");
+plt.YLabel("Time in ms");
+plt.Title($"Results ConcurrentQueue");
+plt
+
+#!csharp
+
+int[] dataX = Enumerable.Range(0, measurementsAmount).ToArray<int>();
+var dataY = measuresBlockingCollection.Select(r => r.TotalMilliseconds).ToArray();
+
+ScottPlot.Plot plt = new();
+plt.Add.Scatter(dataX, dataY);
+plt.XLabel("Measurement number");
+plt.YLabel("Time in ms");
+plt.Title($"Results BlockingCollection");
+plt
+
+#!csharp
+
+using Microsoft.DotNet.Interactive.Formatting;
+
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => 
+    w.Write(((ScottPlot.Plot)p).GetImageHtml(400, 300)), HtmlFormatter.MimeType);
 
 #!markdown
 
 ## Вывод
+
+#!markdown
+
+# Сравнение производительности очередей в многопоточном окружении
+
+В ходе тестирования было выявлено, что использование потокобезопасной очереди ConcurrentQueue приводит к более высокой производительности, чем использование потокобезопасной очереди BlockingCollection, но медленнее чем непотокобезопасная очередь.
+
+Среднее время операции чтения и записи:
+
+* BlockingCollection: 195.03406 мс
+* ConcurrentQueue: 15.67965 мс
+* Queue: 6.24031 мс (на 250,1% быстрее, чем ConcurrentQueue)
+
+
+Выводы:
+
+* Непотокобезопасная очередь продемонстрировала значительно более быстрое время обработки операций чтения и записи по сравнению с другими вариантами. 
+* ConcurrentQueue оказалась наиболее эффективной в контексте многопоточности.
+* BlockingCollection показала наихудшую производительность, демонстрируя время обработки в 12,4 раза больше, чем у ConcurrentQueue.

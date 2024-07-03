@@ -37,9 +37,14 @@
 
 public interface IScheduler
 {
-    bool HasCommand()
+    bool HasCommand();
     ICommand Select();
     void Add(ICommand cmd);
+}
+
+public interface ICommand
+{
+    void Execute();
 }
 
 #!markdown
@@ -55,3 +60,115 @@ public interface IScheduler
 Необходимо учесть этот момент при реализации очереди.
 
 2. Для обепечения справедливости стратегии планировщика в слабом смысле использовать стратегию Round Robbin (циклическую) для определения следующего потока на исполнение.
+
+#!csharp
+
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Threading;
+
+public class RoundRobinScheduler : IScheduler
+{
+    ConcurrentQueue<ICommand> concurrentQueue = new ConcurrentQueue<ICommand>();
+    List<ICommand> commands = new List<ICommand>();
+    int currentIndex = 0;
+
+    public bool HasCommand()
+    {
+        lock (commands) return commands.Count > 0 || !concurrentQueue.IsEmpty;
+    }
+
+    public ICommand Select()
+    {
+        lock (commands)
+        {
+            if (commands.Count == 0)
+            {
+                while (concurrentQueue.TryDequeue(out var queuedCmd))
+                    commands.Add(queuedCmd);
+            }
+            if (commands.Count == 0) return null;
+
+            var selectedCmd = commands[currentIndex];
+            currentIndex = (currentIndex + 1) % commands.Count;
+
+            return selectedCmd;
+        }
+    }
+
+    public void Add(ICommand cmd) => concurrentQueue.Enqueue(cmd);
+}
+
+public class ThreadRunner
+{
+    IScheduler scheduler;
+    Thread thread;
+    bool isRunning;
+
+    public ThreadRunner(IScheduler scheduler)
+    {
+        this.scheduler = scheduler;
+        thread = new Thread(Run);
+        isRunning = true;
+    }
+
+    public void Start() => thread.Start();
+
+    public void Stop()
+    {
+        isRunning = false;
+        thread.Join();
+    }
+
+    private void Run()
+    {
+        while (isRunning)
+        {
+            if (scheduler.HasCommand())
+            {
+                var cmd = scheduler.Select();
+                cmd?.Execute();
+
+                if (cmd is CustomCommand customCmd)
+                {
+                    if (customCmd.remainingExecutions > 0)
+                        scheduler.Add(cmd);
+                }
+            }
+            else Thread.Sleep(10);
+        }
+    }
+}
+
+public class CustomCommand : ICommand
+{
+    public int remainingExecutions;
+
+    public CustomCommand(int executions) => remainingExecutions = executions;
+
+    public void Execute()
+    {
+        if (remainingExecutions > 0)
+        {
+            remainingExecutions--;
+            Console.WriteLine($"Executing command, {remainingExecutions} remained");
+        }
+    }
+}
+
+#!csharp
+
+IScheduler scheduler = new RoundRobinScheduler();
+ThreadRunner threadRunner = new ThreadRunner(scheduler);
+
+List<ICommand> commands = new List<ICommand>() { new CustomCommand(1), new CustomCommand(2), new CustomCommand(3) };
+commands.ForEach(command => scheduler.Add(command));
+
+threadRunner.Start();
+Thread.Sleep(100);
+threadRunner.Stop();
+
+bool allCommandsCompleted = commands.All(cmd => ((CustomCommand)cmd).remainingExecutions == 0);
+
+Console.WriteLine(allCommandsCompleted ? "\nAll commands completed" : "\nNot all commands completed");

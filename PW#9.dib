@@ -65,13 +65,19 @@ class Scheduler
     {
         while (!cancellationTokenSource.IsCancellationRequested)
         {
+
             if (commands.TryDequeue(out ILongableCommand command))
             {
                 command.Execute();
-                if (command.Check()) commands.Enqueue(command);
+                if (command.Check())
+                {
+                    commands.Enqueue(command);
+                    manualResetEvent.Set();
+                }
             }
-            else Thread.Sleep(10);
+            else manualResetEvent.WaitOne();
         }
+
     }
 }
 
@@ -81,7 +87,7 @@ Enumerable.Range(1, 5).ToList().ForEach(i => scheduler.ScheduleCommand(new TestC
 
 Task.Run(() => scheduler.Run());
 
-Thread.Sleep(500);
+Thread.Sleep(10);
 scheduler.HardStop();
 Console.WriteLine("\nПоток остановлен");
 

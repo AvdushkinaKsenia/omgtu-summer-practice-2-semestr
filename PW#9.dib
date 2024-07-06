@@ -20,13 +20,22 @@
 
 #!csharp
 
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.Linq;
+
 interface ICommand
 {
     void Execute();
 }
 
+interface ILongableCommand : ICommand
+{
+    bool Check();
+}
 
-public class TestCommand(int id) : ICommand
+public class TestCommand(int id) : ILongableCommand
 {
     int counter = 0;
 
@@ -34,7 +43,53 @@ public class TestCommand(int id) : ICommand
     {
         Console.WriteLine($"Поток {id} вызов {++counter}");
     }
+
+    public bool Check()
+    {
+        return counter < 3;
+    }
+
 }
+
+class Scheduler
+{
+    private ConcurrentQueue<ILongableCommand> commands = new ConcurrentQueue<ILongableCommand>();
+    private CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
+    private ManualResetEvent manualResetEvent = new ManualResetEvent(false);
+
+    public void ScheduleCommand(ILongableCommand command) => commands.Enqueue(command);
+
+    public void HardStop() => cancellationTokenSource.Cancel();
+
+    public void Run()
+    {
+        while (!cancellationTokenSource.IsCancellationRequested)
+        {
+
+            if (commands.TryDequeue(out ILongableCommand command))
+            {
+                command.Execute();
+                if (command.Check())
+                {
+                    commands.Enqueue(command);
+                    manualResetEvent.Set();
+                }
+            }
+            else manualResetEvent.WaitOne();
+        }
+
+    }
+}
+
+Scheduler scheduler = new Scheduler();
+
+Enumerable.Range(1, 5).ToList().ForEach(i => scheduler.ScheduleCommand(new TestCommand(i)));
+
+Task.Run(() => scheduler.Run());
+
+Thread.Sleep(10);
+scheduler.HardStop();
+Console.WriteLine("\nПоток остановлен");
 
 #!markdown
 
